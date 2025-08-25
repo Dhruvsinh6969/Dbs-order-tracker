@@ -1,13 +1,12 @@
 import streamlit as st
 import pandas as pd
-import json
 import gspread
+import io
+import time
 from google.oauth2.service_account import Credentials
 from datetime import datetime
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
-import io
-import time
 
 # ========== CONFIGURATION ==========
 GOOGLE_SHEET_ID = "1jtUc0olB338B9TLE6f3w8AC7CtUKqwT7Nl4_3I7edd0"
@@ -53,9 +52,12 @@ def get_shop_list(emp_name, distributor, refresh_token):
         return []
     if orders_df.empty:
         return []
+    if "Employee Name" not in orders_df or "Distributor" not in orders_df:
+        return []
+
     filtered_df = orders_df[
-        (orders_df.get("Employee Name") == emp_name) &
-        (orders_df.get("Distributor") == distributor)
+        (orders_df["Employee Name"] == emp_name) &
+        (orders_df["Distributor"] == distributor)
     ]
     existing_shops = []
     seen = set()
@@ -77,6 +79,10 @@ def login(username, password):
 
 if "user" not in st.session_state:
     st.session_state.user = None
+
+# token for form reset
+if "form_reset_token" not in st.session_state:
+    st.session_state.form_reset_token = time.time()
 
 if not st.session_state.user:
     st.title("🔑 Login")
@@ -125,8 +131,10 @@ else:
         if st.session_state.user["Distributors"]:
             distributors_list = [d.strip() for d in st.session_state.user["Distributors"].split(",")]
 
+        token = st.session_state.form_reset_token
+
         # Distributor selection
-        distributor = st.selectbox("🏪 Distributor", distributors_list, key="distributor")
+        distributor = st.selectbox("🏪 Distributor", distributors_list, key=f"distributor_{token}")
 
         # Shop list
         shop_list = get_shop_list(emp_name, distributor, st.session_state.get("shops_refresh_token", 0))
@@ -136,43 +144,34 @@ else:
             "📍 Shop Name (type to search or add new)",
             options=[""] + shop_list,
             index=0,
-            key="shop_select",
+            key=f"shop_select_{token}",
             placeholder="Start typing shop name..."
         )
         if not shop_name:
-            shop_name = st.text_input("Enter New Shop Name", key="shop_new")
+            shop_name = st.text_input("Enter New Shop Name", key=f"shop_new_{token}")
 
-        # Two refresh buttons
-        col1, col2 = st.columns(2)
-        with col1:
-            if st.button("🔄 Refresh Shops"):
-                st.session_state["shops_refresh_token"] = time.time()
-                st.rerun()
-        with col2:
-            if st.button("🧹 Clear Form"):
-                preserve_keys = ["user", "shops_refresh_token"]
-                for key in list(st.session_state.keys()):
-                    if key not in preserve_keys:
-                        del st.session_state[key]
-                st.rerun()
+        # Refresh Shops button
+        if st.button("🔄 Refresh Shops"):
+            st.session_state["shops_refresh_token"] = time.time()
+            st.rerun()
 
         # Upload shop photo
-        photo = st.file_uploader("📷 Upload Shop Photo", type=["jpg", "jpeg", "png"], key="photo")
+        photo = st.file_uploader("📷 Upload Shop Photo", type=["jpg", "jpeg", "png"], key=f"photo_{token}")
 
         # Beat Area
-        beat_area = st.text_input("🗺️ Beat Area", key="beat_area")
+        beat_area = st.text_input("🗺️ Beat Area", key=f"beat_area_{token}")
 
         # Order Date
-        order_date = st.date_input("📅 Order Date", value=datetime.today(), key="order_date")
+        order_date = st.date_input("📅 Order Date", value=datetime.today(), key=f"order_date_{token}")
 
         # Last Visited Date
-        last_visit = st.date_input("📅 Last Visited Date", key="last_visit")
+        last_visit = st.date_input("📅 Last Visited Date", key=f"last_visit_{token}")
 
         # No. of Visits
-        num_visits = st.number_input("🔁 No. of Visits", min_value=1, step=1, key="num_visits")
+        num_visits = st.number_input("🔁 No. of Visits", min_value=1, step=1, key=f"num_visits_{token}")
 
         # Margin
-        margin = st.number_input("💰 Margin (%)", min_value=0.0, max_value=100.0, value=20.0, key="margin")
+        margin = st.number_input("💰 Margin (%)", min_value=0.0, max_value=100.0, value=20.0, key=f"margin_{token}")
 
         # Product matrix
         st.subheader("📦 Product Details")
@@ -182,14 +181,14 @@ else:
             with cols[0]:
                 st.markdown(f"**{product}**")
             with cols[1]:
-                qty = st.number_input(f"Qty", min_value=0, step=1, key=f"qty_{product}")
+                qty = st.number_input(f"Qty", min_value=0, step=1, key=f"qty_{product}_{token}")
             with cols[2]:
-                soh = st.number_input(f"SOH", min_value=0, step=1, key=f"soh_{product}")
+                soh = st.number_input(f"SOH", min_value=0, step=1, key=f"soh_{product}_{token}")
             if qty > 0 or soh > 0:
                 product_entries.append({"SKU": product, "QTY": qty, "SOH": soh})
 
         # Remarks
-        remarks = st.text_area("📝 Remarks (Optional)", key="remarks")
+        remarks = st.text_area("📝 Remarks (Optional)", key=f"remarks_{token}")
 
         # Submit Order
         if st.button("📤 Submit Order"):
@@ -252,6 +251,10 @@ else:
                         st.success(f"✅ Order submitted! {success_count} product(s) added.")
                         if drive_url not in ["Not Uploaded", "Upload Failed"]:
                             st.markdown(f"[📸 View Photo]({drive_url})")
+
+                        # 🔄 Reset form after submit
+                        st.session_state.form_reset_token = time.time()
+                        st.rerun()
                     else:
                         st.error("❌ No products were submitted.")
 
